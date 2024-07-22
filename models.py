@@ -343,6 +343,13 @@ class WeightPerturbMLP(MLP):
         W_h_update = delta_loss * delta_W_h / noise ** 2
         W_y_update = delta_loss * delta_W_y / noise ** 2
         return W_h_update, W_y_update
+    def perturb_loss(self, rng, inputs, targets):
+        """
+        Calculates the perturbation loss for Weight Perturbation MLP.
+        """
+        delta_W_h, delta_W_y = self.perturb(rng, inputs, targets)
+        perturb_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        return perturb_loss
 
 class NodePerturbMLP(MLP):
     """
@@ -368,6 +375,13 @@ class NodePerturbMLP(MLP):
             delta_loss * (((output_p - output) / noise ** 2)[:, None, :] * add_bias(hidden_p)[None, :, :]), axis=2)
 
         return (hidden_update, output_update)
+    def node_perturb_loss(self, rng, inputs, targets, noise=1.0):
+        """
+        Calculates the node perturbation loss for Node Perturbation MLP.
+        """
+        delta_W_h, delta_W_y = self.node_perturb(rng, inputs, targets, noise=noise)
+        node_perturb_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        return node_perturb_loss
     
 class FeedbackAlignmentMLP(MLP):
     """
@@ -390,6 +404,13 @@ class FeedbackAlignmentMLP(MLP):
         delta_W_y = np.dot(error * self.act_deriv(output), add_bias(hidden).transpose())
 
         return delta_W_h, delta_W_y
+    def feedback_loss(self, rng, inputs, targets):
+        """
+        Calculates the feedback alignment loss for Feedback Alignment MLP.
+        """
+        delta_W_h, delta_W_y = self.feedback(rng, inputs, targets)
+        feedback_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        return feedback_loss
 
 class KolenPollackMLP(MLP):
     """
@@ -415,7 +436,35 @@ class KolenPollackMLP(MLP):
         delta_B = delta_err[:, :-1].transpose() - 0.1 * self.B
         self.B += eta_back * delta_B
         return (delta_W_h, delta_W_y)
-    
+    def kolepoll_loss(self, rng, inputs, targets, eta_back=0.01):
+        """
+        Calculates the Kolen-Pollack loss for Kolen-Pollack MLP.
+        """
+        delta_W_h, delta_W_y = self.kolepoll(rng, inputs, targets, eta_back=eta_back)
+        kolepoll_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        return kolepoll_loss
+
+# Define hyperparameters
+BATCH_SIZE = 64
+input_size = 10  # Example input size
+hidden_size = 50  # Example hidden size
+output_size = 1   # Example output size
+
+# Initialize models
+weight_perturb_mlp = WeightPerturbMLP(input_size, hidden_size, output_size)
+node_perturb_mlp = NodePerturbMLP(input_size, hidden_size, output_size)
+feedback_align_mlp = FeedbackAlignmentMLP(input_size, hidden_size, output_size)
+kolen_pollack_mlp = KolenPollackMLP(input_size, hidden_size, output_size)
+
+# Initialize DataLoader for test set
+test_loader = torch.utils.data.DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False)
+
+# List of all MLP models
+mlps = [weight_perturb_mlp, node_perturb_mlp, feedback_align_mlp, kolen_pollack_mlp]
+
+# Compute losses
+losses = compute_losses_for_all_mlps(mlps, test_loader)
+print(losses)
 
 if __name__ == "__main__":
     pass
