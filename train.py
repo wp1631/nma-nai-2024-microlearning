@@ -15,6 +15,8 @@ from models import (
     HebbianMultiLayerPerceptron,
 )
 from visualization import plot_class_distribution
+from torchvision import transforms, datasets
+import matplotlib.pyplot as plt
 
 # Define hyperparameters
 BATCH_SIZE = 64
@@ -380,11 +382,13 @@ def train_model_extended(
     return MLP, results_dict
 
 
+seed = 42
+rng_wp, N, sigma, activation = np.random.default_rng(seed=seed), 100, 1.0, "sigmoid"
 # Initialize models
-weight_perturb_mlp = WeightPerturbMLP(input_size, hidden_size, output_size)
-node_perturb_mlp = NodePerturbMLP(input_size, hidden_size, output_size)
-feedback_align_mlp = FeedbackAlignmentMLP(input_size, hidden_size, output_size)
-kolen_pollack_mlp = KolenPollackMLP(input_size, hidden_size, output_size)
+weight_perturb_mlp = WeightPerturbMLP(rng_wp, N, sigma, activation)
+node_perturb_mlp = NodePerturbMLP(rng_wp, N, sigma, activation)
+feedback_align_mlp = FeedbackAlignmentMLP(rng_wp, N, sigma, activation)
+kolen_pollack_mlp = KolenPollackMLP(rng_wp, N, sigma, activation)
 
 # Initialize DataLoader for test set
 test_loader = torch.utils.data.DataLoader(
@@ -392,11 +396,97 @@ test_loader = torch.utils.data.DataLoader(
 )
 
 # List of all MLP models
-mlps = [weight_perturb_mlp, node_perturb_mlp, feedback_align_mlp, kolen_pollack_mlp]
-
-# Compute losses
-# losses = compute_losses_for_all_mlps(mlps, test_loader)
-# print(losses)
+mlps = [
+    weight_perturb_mlp,
+    # node_perturb_mlp, feedback_align_mlp, kolen_pollack_mlp
+]
 
 if __name__ == "__main__":
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        # Load the MNIST dataset, 50K training images, 10K validation, 10K testing
+        train_set = datasets.MNIST(
+            "./", transform=transforms.ToTensor(), train=True, download=True
+        )
+        test_set = datasets.MNIST(
+            "./", transform=transforms.ToTensor(), train=False, download=True
+        )
+
+        rng_data = np.random.default_rng(seed=42)
+        train_num = 50000
+        shuffled_train_idx = rng_data.permutation(train_num)
+
+        full_train_images = train_set.data.numpy().astype(float) / 255
+        train_images = (
+            full_train_images[shuffled_train_idx[:train_num]]
+            .reshape((-1, 784))
+            .T.copy()
+        )
+        valid_images = (
+            full_train_images[shuffled_train_idx[train_num:]]
+            .reshape((-1, 784))
+            .T.copy()
+        )
+        test_images = (test_set.data.numpy().astype(float) / 255).reshape((-1, 784)).T
+
+        full_train_labels = torch.nn.functional.one_hot(
+            train_set.targets, num_classes=10
+        ).numpy()
+        train_labels = full_train_labels[shuffled_train_idx[:train_num]].T.copy()
+        valid_labels = full_train_labels[shuffled_train_idx[train_num:]].T.copy()
+        test_labels = (
+            torch.nn.functional.one_hot(test_set.targets, num_classes=10).numpy().T
+        )
+
+        full_train_images = None
+        full_train_labels = None
+        train_set = None
+        test_set = None
+
+    # Plot some example images to make sure everything is loaded in properly
+    with plt.xkcd():
+        fig, axs = plt.subplots(1, 10)
+        for c in range(10):
+            axs[c].imshow(train_images[:, c].reshape((28, 28)), cmap="gray")
+            axs[c].axis("off")
+        fig.suptitle("Data download check!", fontsize=16)
+        plt.show()
+    numhidden = 500
+    batchsize = 200
+    initweight = 0.1
+    learnrate = 0.001
+    noise = 0.1
+    numepochs = 3
+    numrepeats = 1
+    numbatches = int(train_images.shape[1] / batchsize)
+    numupdates = numepochs * numbatches
+    activation = "sigmoid"
+    report = True
+    rep_rate = 1
+    seed = 12345
+    rng_wp = np.random.default_rng(seed=seed)
+    indices = rng_wp.choice(range(test_images.shape[1]), size=(1000,), replace=False)
+    losses_perturb = np.zeros((numupdates,))
+    accuracy_perturb = np.zeros((numepochs,))
+    (losses_perturb[:], accuracy_perturb[:], _, snr_perturb) = weight_perturb_mlp.train(
+        rng_wp,
+        train_images,
+        train_labels,
+        numepochs,
+        test_images[:, indices],
+        test_labels[:, indices],
+        learning_rate=learnrate,
+        batch_size=batchsize,
+        algorithm="perturb",
+        noise=noise,
+        report=report,
+        report_rate=rep_rate,
+    )
+    with plt.xkcd():
+        fig, ax = plt.subplots()
+        ax.plot(losses_perturb, label="Loss")
+        ax.set_ylabel("Loss")
+        ax.set_xlabel("Epochs")
+        fig.suptitle("Test plot perturbation loss", fontsize=16)
+        plt.show()
     pass

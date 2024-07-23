@@ -38,6 +38,7 @@ def add_bias(inputs):
     """
     Append an "always on" bias unit to some inputs
     """
+    print(inputs.shape)
     return np.append(inputs, np.ones((1, inputs.shape[1])), axis=0)
 
 
