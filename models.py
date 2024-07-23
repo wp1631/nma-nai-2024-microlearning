@@ -1,5 +1,6 @@
 import numpy as np
-from tqdm import tqdm
+import torch
+
 
 def sigmoid(X):
     """
@@ -7,7 +8,9 @@ def sigmoid(X):
     """
 
     # to avoid runtime warnings, if abs(X) is more than 500, we just cap it there
-    Y = X.copy()  # this ensures we don't overwrite entries in X - Python can be a trickster!
+    Y = (
+        X.copy()
+    )  # this ensures we don't overwrite entries in X - Python can be a trickster!
     toobig = X > 500
     toosmall = X < -500
     Y[toobig] = 500
@@ -15,23 +18,28 @@ def sigmoid(X):
 
     return 1.0 / (1.0 + np.exp(-Y))
 
+
 def ReLU(X):
     """
     Returns the ReLU function, i.e. X if X > 0, 0 otherwise
     """
 
     # to avoid runtime warnings, if abs(X) is more than 500, we just cap it there
-    Y = X.copy()  # this ensures we don't overwrite entries in X - Python can be a trickster!
+    Y = (
+        X.copy()
+    )  # this ensures we don't overwrite entries in X - Python can be a trickster!
     neg = X < 0
     Y[neg] = 0
 
     return Y
+
 
 def add_bias(inputs):
     """
     Append an "always on" bias unit to some inputs
     """
     return np.append(inputs, np.ones((1, inputs.shape[1])), axis=0)
+
 
 # Creates a random set of batches, returns an array of indices, one for each batch
 def create_batches(rng, batch_size, num_samples):
@@ -45,7 +53,156 @@ def create_batches(rng, batch_size, num_samples):
     num_batches = int(np.floor(num_samples / batch_size))
 
     # get the batches (without replacement)
-    return rng.choice(np.arange(num_samples), size=(num_batches, batch_size), replace=False)
+    return rng.choice(
+        np.arange(num_samples), size=(num_batches, batch_size), replace=False
+    )
+
+
+class MultiLayerPerceptron(torch.nn.Module):
+    """
+    Simple multilayer perceptron model class with one hidden layer.
+    """
+
+    def __init__(
+        self,
+        num_inputs=784,
+        num_hidden=100,
+        num_outputs=10,
+        activation_type="sigmoid",
+        bias=False,
+    ):
+        """
+        Initializes a multilayer perceptron with a single hidden layer.
+
+        Arguments:
+        - num_inputs (int, optional): number of input units (i.e., image size)
+        - num_hidden (int, optional): number of hidden units in the hidden layer
+        - num_outputs (int, optional): number of output units (i.e., number of
+          classes)
+        - activation_type (str, optional): type of activation to use for the hidden
+          layer ('sigmoid', 'tanh', 'relu' or 'linear')
+        - bias (bool, optional): if True, each linear layer will have biases in
+          addition to weights
+        """
+
+        super().__init__()
+
+        self.num_inputs = num_inputs
+        self.num_hidden = num_hidden
+        self.num_outputs = num_outputs
+        self.activation_type = activation_type
+        self.bias = bias  # boolean
+
+        # default weights (and biases, if applicable) initialization is used
+        # see https://github.com/pytorch/pytorch/blob/main/torch/nn/modules/linear.py
+        self.lin1 = torch.nn.Linear(num_inputs, num_hidden, bias=bias)
+        self.lin2 = torch.nn.Linear(num_hidden, num_outputs, bias=bias)
+
+        self._store_initial_weights_biases()
+
+        self._set_activation()  # activation on the hidden layer
+        self.softmax = torch.nn.Softmax(dim=1)  # activation on the output layer
+
+    def _store_initial_weights_biases(self):
+        """
+        Stores a copy of the network's initial weights and biases.
+        """
+
+        self.init_lin1_weight = self.lin1.weight.data.clone()
+        self.init_lin2_weight = self.lin2.weight.data.clone()
+        if self.bias:
+            self.init_lin1_bias = self.lin1.bias.data.clone()
+            self.init_lin2_bias = self.lin2.bias.data.clone()
+
+    def _set_activation(self):
+        """
+        Sets the activation function used for the hidden layer.
+        """
+
+        if self.activation_type.lower() == "sigmoid":
+            self.activation = torch.nn.Sigmoid()  # maps to [0, 1]
+        elif self.activation_type.lower() == "tanh":
+            self.activation = torch.nn.Tanh()  # maps to [-1, 1]
+        elif self.activation_type.lower() == "relu":
+            self.activation = torch.nn.ReLU()  # maps to positive
+        elif self.activation_type.lower() == "identity":
+            self.activation = torch.nn.Identity()  # maps to same
+        else:
+            raise NotImplementedError(
+                f"{self.activation_type} activation type not recognized. Only "
+                "'sigmoid', 'relu' and 'identity' have been implemented so far."
+            )
+
+    def forward(self, X, y=None):
+        """
+        Runs a forward pass through the network.
+
+        Arguments:
+        - X (torch.Tensor): Batch of input images.
+        - y (torch.Tensor, optional): Batch of targets. This variable is not used
+          here. However, it may be needed for other learning rules, to it is
+          included as an argument here for compatibility.
+
+        Returns:
+        - y_pred (torch.Tensor): Predicted targets.
+        """
+
+        l1_input = self.lin1(X.reshape(-1, self.num_inputs))
+        h = self.activation(l1_input)
+        l2_input = self.lin2(h)
+        y_pred = self.softmax(l2_input)
+        return y_pred
+
+    def forward_backprop(self, X):
+        """
+        Identical to forward(). Should not be overwritten when creating new
+        child classes to implement other learning rules, as this method is used
+        to compare the gradients calculated with other learning rules to those
+        calculated with backprop.
+        """
+
+        h = self.activation(self.lin1(X.reshape(-1, self.num_inputs)))
+        y_pred = self.softmax(self.lin2(h))
+        return y_pred
+
+    def list_parameters(self):
+        """
+        Returns a list of model names for a gradient dictionary.
+
+        Returns:
+        - params_list (list): List of parameter names.
+        """
+
+        params_list = list()
+
+        for layer_str in ["lin1", "lin2"]:
+            params_list.append(f"{layer_str}_weight")
+            if self.bias:
+                params_list.append(f"{layer_str}_bias")
+
+        return params_list
+
+    def gather_gradient_dict(self):
+        """
+        Gathers a gradient dictionary for the model's parameters. Raises a
+        runtime error if any parameters have no gradients.
+
+        Returns:
+        - gradient_dict (dict): A dictionary of gradients for each parameter.
+        """
+
+        params_list = self.list_parameters()
+
+        gradient_dict = dict()
+        for param_name in params_list:
+            layer_str, param_str = param_name.split("_")  # lin1_parameterName
+            layer = getattr(self, layer_str)  # self.lin1
+            grad = getattr(layer, param_str).grad  # slef.lin1.grad
+            if grad is None:
+                raise RuntimeError("No gradient was computed")
+            gradient_dict[param_name] = grad.detach().clone().numpy()
+
+        return gradient_dict
 
 
 # Calculate the accuracy of the network on some data
@@ -55,7 +212,7 @@ def calculate_accuracy(outputs, targets):
     """
 
     # binarize the outputs for an easy calculation
-    categories = (outputs == np.tile(outputs.max(axis=0), (10, 1))).astype('float')
+    categories = (outputs == np.tile(outputs.max(axis=0), (10, 1))).astype("float")
 
     # get the accuracy
     accuracy = np.sum(categories * targets) / targets.shape[1]
@@ -69,7 +226,11 @@ def calculate_cosine_similarity(grad_1, grad_2):
     """
     grad_1 = grad_1.flatten()
     grad_2 = grad_2.flatten()
-    return np.dot(grad_1, grad_2) / np.sqrt(np.dot(grad_1, grad_1)) / np.sqrt(np.dot(grad_2, grad_2))
+    return (
+        np.dot(grad_1, grad_2)
+        / np.sqrt(np.dot(grad_1, grad_1))
+        / np.sqrt(np.dot(grad_2, grad_2))
+    )
 
 
 def calculate_grad_snr(grad, epsilon=1e-3):
@@ -78,13 +239,14 @@ def calculate_grad_snr(grad, epsilon=1e-3):
     """
     return np.mean(np.abs(np.mean(grad, axis=0)) / (np.std(grad, axis=0) + epsilon))
 
+
 class MLP(object):
     """
     The class for creating and training a two-layer perceptron.
     """
 
     # The initialization function
-    def __init__(self, rng, N=100, sigma=1.0, activation='sigmoid'):
+    def __init__(self, rng, N=100, sigma=1.0, activation="sigmoid"):
         """
         The initialization function for the MLP.
 
@@ -99,8 +261,12 @@ class MLP(object):
         self.activation = activation
 
         # initialize the weights
-        self.W_h = rng.normal(scale=self.sigma, size=(self.N, 784 + 1))  # input-to-hidden weights & bias
-        self.W_y = rng.normal(scale=self.sigma, size=(10, self.N + 1))  # hidden-to-output weights & bias
+        self.W_h = rng.normal(
+            scale=self.sigma, size=(self.N, 784 + 1)
+        )  # input-to-hidden weights & bias
+        self.W_y = rng.normal(
+            scale=self.sigma, size=(10, self.N + 1)
+        )  # hidden-to-output weights & bias
         self.B = rng.normal(scale=self.sigma, size=(self.N, 10))  # feedback weights
 
     # The non-linear activation function
@@ -108,16 +274,16 @@ class MLP(object):
         """
         Pass some inputs through the activation function.
         """
-        if self.activation == 'sigmoid':
+        if self.activation == "sigmoid":
             Y = sigmoid(inputs)
-        elif self.activation == 'ReLU':
+        elif self.activation == "ReLU":
             Y = ReLU(inputs)
         else:
             raise Exception("Unknown activation function")
         return Y
 
     # The function for performing a forward pass up through the network during inference
-    def inference(self, rng, inputs, W_h=None, W_y=None, noise=0.):
+    def inference(self, rng, inputs, W_h=None, W_y=None, noise=0.0):
         """
         Recognize inputs, i.e. do a forward pass up through the network. If desired, alternative weights
         can be provided
@@ -131,13 +297,13 @@ class MLP(object):
 
         # calculate the hidden activities
         hidden = self.activate(np.dot(W_h, add_bias(inputs)))
-        if not (noise == 0.):
+        if not (noise == 0.0):
             hidden += rng.normal(scale=noise, size=hidden.shape)
 
         # calculate the output activities
         output = self.activate(np.dot(W_y, add_bias(hidden)))
 
-        if not (noise == 0.):
+        if not (noise == 0.0):
             output += rng.normal(scale=noise, size=output.shape)
 
         return hidden, output
@@ -147,9 +313,9 @@ class MLP(object):
         """
         Calculate the derivative of some activations with respect to the inputs
         """
-        if self.activation == 'sigmoid':
+        if self.activation == "sigmoid":
             derivative = activity * (1 - activity)
-        elif self.activation == 'ReLU':
+        elif self.activation == "ReLU":
             derivative = 1.0 * (activity > 1)
         else:
             raise Exception("Unknown activation function")
@@ -161,7 +327,7 @@ class MLP(object):
         """
 
         # do a forward sweep through the network
-        if (output is None):
+        if output is None:
             (hidden, output) = self.inference(rng, inputs, W_h, W_y)
         return np.sum((targets - output) ** 2, axis=0)
 
@@ -170,7 +336,9 @@ class MLP(object):
         """
         Calculate the mean-squared error loss on the given targets (average over the batch)
         """
-        return np.mean(self.mse_loss_batch(rng, inputs, targets, W_h=W_h, W_y=W_y, output=output))
+        return np.mean(
+            self.mse_loss_batch(rng, inputs, targets, W_h=W_h, W_y=W_y, output=output)
+        )
 
     # function for calculating perturbation updates
     def perturb(self, rng, inputs, targets, noise=1.0):
@@ -197,8 +365,10 @@ class MLP(object):
         # calculate the gradients
         error = targets - output
         delta_W_h = np.dot(
-            np.dot(self.W_y[:, :-1].transpose(), error * self.act_deriv(output)) * self.act_deriv(hidden), \
-            add_bias(inputs).transpose())
+            np.dot(self.W_y[:, :-1].transpose(), error * self.act_deriv(output))
+            * self.act_deriv(hidden),
+            add_bias(inputs).transpose(),
+        )
         delta_W_y = np.dot(error * self.act_deriv(output), add_bias(hidden).transpose())
 
         return delta_W_h, delta_W_y
@@ -217,15 +387,17 @@ class MLP(object):
         """
         raise NotImplementedError()
 
-    def return_grad(self, rng, inputs, targets, algorithm='backprop', eta=0., noise=1.0):
+    def return_grad(
+        self, rng, inputs, targets, algorithm="backprop", eta=0.0, noise=1.0
+    ):
         # calculate the updates for the weights with the appropriate algorithm
-        if algorithm == 'perturb':
+        if algorithm == "perturb":
             delta_W_h, delta_W_y = self.perturb(rng, inputs, targets, noise=noise)
-        elif algorithm == 'node_perturb':
+        elif algorithm == "node_perturb":
             delta_W_h, delta_W_y = self.node_perturb(rng, inputs, targets, noise=noise)
-        elif algorithm == 'feedback':
+        elif algorithm == "feedback":
             delta_W_h, delta_W_y = self.feedback(rng, inputs, targets)
-        elif algorithm == 'kolepoll':
+        elif algorithm == "kolepoll":
             delta_W_h, delta_W_y = self.kolepoll(rng, inputs, targets, eta_back=eta)
         else:
             delta_W_h, delta_W_y = self.gradient(rng, inputs, targets)
@@ -233,7 +405,7 @@ class MLP(object):
         return delta_W_h, delta_W_y
 
     # function for updating the network
-    def update(self, rng, inputs, targets, algorithm='backprop', eta=0.01, noise=1.0):
+    def update(self, rng, inputs, targets, algorithm="backprop", eta=0.01, noise=1.0):
         """
         Updates the synaptic weights (and unit biases) using the given algorithm, options are:
 
@@ -243,15 +415,30 @@ class MLP(object):
         - 'kolepoll': Kolen-Pollack
         """
 
-        delta_W_h, delta_W_y = self.return_grad(rng, inputs, targets, algorithm=algorithm, eta=eta, noise=noise)
+        delta_W_h, delta_W_y = self.return_grad(
+            rng, inputs, targets, algorithm=algorithm, eta=eta, noise=noise
+        )
 
         # do the updates
         self.W_h += eta * delta_W_h
         self.W_y += eta * delta_W_y
 
     # train the network using the update functions
-    def train(self, rng, images, labels, num_epochs, test_images, test_labels, learning_rate=0.01, batch_size=20, \
-              algorithm='backprop', noise=1.0, report=False, report_rate=10):
+    def train(
+        self,
+        rng,
+        images,
+        labels,
+        num_epochs,
+        test_images,
+        test_labels,
+        learning_rate=0.01,
+        batch_size=20,
+        algorithm="backprop",
+        noise=1.0,
+        report=False,
+        report_rate=10,
+    ):
         """
         Trains the network with algorithm in batches for the given number of epochs on the data provided.
 
@@ -283,7 +470,9 @@ class MLP(object):
         for t in range(test_images.shape[1]):
             inputs = test_images[:, [t]]
             targets = test_labels[:, [t]]
-            grad[t, ...], _ = self.return_grad(rng, inputs, targets, algorithm=algorithm, eta=0., noise=noise)
+            grad[t, ...], _ = self.return_grad(
+                rng, inputs, targets, algorithm=algorithm, eta=0.0, noise=noise
+            )
         snr = calculate_grad_snr(grad)
         # run the training for the given number of epochs
         update_counter = 0
@@ -299,26 +488,249 @@ class MLP(object):
                 losses[update_counter] = self.mse_loss(rng, inputs, targets)
 
                 # update the weights
-                self.update(rng, inputs, targets, eta=learning_rate, algorithm=algorithm, noise=noise)
+                self.update(
+                    rng,
+                    inputs,
+                    targets,
+                    eta=learning_rate,
+                    algorithm=algorithm,
+                    noise=noise,
+                )
                 update_counter += 1
 
             # calculate the current test accuracy
             (testhid, testout) = self.inference(rng, test_images)
             accuracy[epoch] = calculate_accuracy(testout, test_labels)
-            grad_test, _ = self.return_grad(rng, test_images, test_labels, algorithm=algorithm, eta=0., noise=noise)
-            grad_bp, _ = self.return_grad(rng, test_images, test_labels, algorithm='backprop', eta=0., noise=noise)
+            grad_test, _ = self.return_grad(
+                rng, test_images, test_labels, algorithm=algorithm, eta=0.0, noise=noise
+            )
+            grad_bp, _ = self.return_grad(
+                rng,
+                test_images,
+                test_labels,
+                algorithm="backprop",
+                eta=0.0,
+                noise=noise,
+            )
             cosine_similarity[epoch] = calculate_cosine_similarity(grad_test, grad_bp)
 
             # print an output message every 10 epochs
             if report and np.mod(epoch + 1, report_rate) == 0:
-                print("...completed ", epoch + 1,
-                      " epochs of training. Current loss: ", round(losses[update_counter - 1], 2), ".")
+                print(
+                    "...completed ",
+                    epoch + 1,
+                    " epochs of training. Current loss: ",
+                    round(losses[update_counter - 1], 2),
+                    ".",
+                )
 
         # provide an output message
         if report:
             print("Training complete.")
 
         return (losses, accuracy, cosine_similarity, snr)
+
+
+class HebbianFunction(torch.autograd.Function):
+    """
+    Gradient computing function class for Hebbian learning.
+    """
+
+    @staticmethod
+    def forward(
+        context, input: torch.Tensor, weight, bias=None, nonlinearity=None, target=None
+    ):
+        """
+        Forward pass method for the layer. Computes the output of the layer and
+        stores variables needed for the backward pass.
+
+        Arguments:
+        - context (torch context): context in which variables can be stored for
+          the backward pass.
+        - input (torch tensor): input to the layer.
+        - weight (torch tensor): layer weights.
+        - bias (torch tensor, optional): layer biases.
+        - nonlinearity (torch functional, optional): nonlinearity for the layer.
+        - target (torch tensor, optional): layer target, if applicable.
+
+        Returns:
+        - output (torch tensor): layer output.
+        """
+
+        # compute the output for the layer (linear layer with non-linearity)
+        output = input.mm(weight.t())  # Matrix multiplication
+        if bias is not None:
+            output += bias.unsqueeze(0).expand_as(output)
+        if nonlinearity is not None:
+            output = nonlinearity(output)
+
+        # calculate the output to use for the backward pass
+        output_for_update = (
+            output if target is None else target
+        )  # Train on target or not? if not use the actual output
+
+        # store variables in the context for the backward pass
+        context.save_for_backward(input, weight, bias, output_for_update)
+
+        return output
+
+    @staticmethod
+    def backward(context, grad_output=None):
+        """
+        Backward pass method for the layer. Computes and returns the gradients for
+        all variables passed to forward (returning None if not applicable).
+
+        Arguments:
+        - context (torch context): context in which variables can be stored for
+          the backward pass.
+        - input (torch tensor): input to the layer.
+        - weight (torch tensor): layer weights.
+        - bias (torch tensor, optional): layer biases.
+        - nonlinearity (torch functional, optional): nonlinearity for the layer.
+        - target (torch tensor, optional): layer target, if applicable.
+
+        Returns:
+        - grad_input (None): gradients for the input (None, since gradients are not
+          backpropagated in Hebbian learning).
+        - grad_weight (torch tensor): gradients for the weights.
+        - grad_bias (torch tensor or None): gradients for the biases, if they aren't
+          None.
+        - grad_nonlinearity (None): gradients for the nonlinearity (None, since
+          gradients do not apply to the non-linearities).
+        - grad_target (None): gradients for the targets (None, since
+          gradients do not apply to the targets).
+        """
+
+        input, weight, bias, output_for_update = context.saved_tensors
+        grad_input = None
+        grad_weight = None
+        grad_bias = None
+        grad_nonlinearity = None
+        grad_target = None
+
+        input_needs_grad = context.needs_input_grad[0]
+        if input_needs_grad:  # What is pass mean in this case? Why pass?
+            pass
+
+        weight_needs_grad = context.needs_input_grad[1]
+        if weight_needs_grad:
+            grad_weight = output_for_update.t().mm(input)
+            grad_weight = grad_weight / len(input)  # average across batch
+
+            # center around 0
+            grad_weight = grad_weight - grad_weight.mean(
+                axis=0
+            )  # center around 0 -> ? Suspect to be one of normalization method
+
+            # or apply Oja's rule (not compatible with clamping outputs to the targets!)
+            #  oja_subtract = output_for_update.pow(2).mm(grad_weight).mean(axis=0)
+            #  grad_weight = grad_weight - oja_subtract
+
+            # take the negative, as the gradient will be subtracted
+            grad_weight = -grad_weight
+
+        if bias is not None:
+            bias_needs_grad = context.needs_input_grad[2]
+            if bias_needs_grad:
+                grad_bias = output_for_update.mean(axis=0)  # average across batch
+
+                # center around 0
+                grad_bias = grad_bias - grad_bias.mean()
+
+                # or apply an adaptation of Oja's rule for biases
+                # (not compatible with clamping outputs to the targets!)
+                # oja_subtract = (output_for_update.pow(2) * bias).mean(axis=0)
+                # grad_bias = grad_bias - oja_subtract
+
+                # take the negative, as the gradient will be subtracted
+                grad_bias = -grad_bias
+
+        return grad_input, grad_weight, grad_bias, grad_nonlinearity, grad_target
+
+
+class HebbianMultiLayerPerceptron(MultiLayerPerceptron):
+    """
+    Hebbian multilayer perceptron with one hidden layer.
+    """
+
+    def __init__(self, clamp_output=True, **kwargs):
+        """
+        Initializes a Hebbian multilayer perceptron object
+
+        Arguments:
+        - clamp_output (bool, optional): if True, outputs are clamped to targets,
+          if available, when computing weight updates.
+        """
+
+        self.clamp_output = clamp_output
+        super().__init__(**kwargs)
+
+    def forward(self, X, y=None):
+        """
+        Runs a forward pass through the network.
+
+        Arguments:
+        - X (torch.Tensor): Batch of input images.
+        - y (torch.Tensor, optional): Batch of targets, stored for the backward
+          pass to compute the gradients for the last layer.
+
+        Returns:
+        - y_pred (torch.Tensor): Predicted targets.
+        """
+
+        h = HebbianFunction.apply(
+            X.reshape(-1, self.num_inputs),
+            self.lin1.weight,
+            self.lin1.bias,
+            self.activation,
+        )
+
+        # if targets are provided, they can be used instead of the last layer's
+        # output to train the last layer.
+        if y is None or not self.clamp_output:
+            targets = None
+        else:
+            targets = torch.nn.functional.one_hot(
+                y, num_classes=self.num_outputs
+            ).float()
+
+        y_pred = HebbianFunction.apply(
+            h, self.lin2.weight, self.lin2.bias, self.softmax, targets
+        )
+
+        return y_pred
+
+
+class HebbianBackpropMultiLayerPerceptron(MultiLayerPerceptron):
+    """
+    Hybrid backprop/Hebbian multilayer perceptron with one hidden layer.
+    """
+
+    def forward(self, X, y=None):
+        """
+        Runs a forward pass through the network.
+
+        Arguments:
+        - X (torch.Tensor): Batch of input images.
+        - y (torch.Tensor, optional): Batch of targets, not used here.
+
+        Returns:
+        - y_pred (torch.Tensor): Predicted targets.
+        """
+
+        # Hebbian layer
+        h = HebbianFunction.apply(
+            X.reshape(-1, self.num_inputs),
+            self.lin1.weight,
+            self.lin1.bias,
+            self.activation,
+        )
+
+        # backprop layer
+        y_pred = self.softmax(self.lin2(h))
+
+        return y_pred
+
 
 class WeightPerturbMLP(MLP):
     """
@@ -336,20 +748,26 @@ class WeightPerturbMLP(MLP):
 
         # calculate the loss with and without the perturbations
         loss_now = self.mse_loss(rng, inputs, targets)
-        loss_per = self.mse_loss(rng, inputs, targets, self.W_h + delta_W_h, self.W_y + delta_W_y)
+        loss_per = self.mse_loss(
+            rng, inputs, targets, self.W_h + delta_W_h, self.W_y + delta_W_y
+        )
 
         # updates
         delta_loss = loss_now - loss_per
-        W_h_update = delta_loss * delta_W_h / noise ** 2
-        W_y_update = delta_loss * delta_W_y / noise ** 2
+        W_h_update = delta_loss * delta_W_h / noise**2
+        W_y_update = delta_loss * delta_W_y / noise**2
         return W_h_update, W_y_update
+
     def perturb_loss(self, rng, inputs, targets):
         """
         Calculates the perturbation loss for Weight Perturbation MLP.
         """
         delta_W_h, delta_W_y = self.perturb(rng, inputs, targets)
-        perturb_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        perturb_loss = self.mse_loss(
+            rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y
+        )
         return perturb_loss
+
 
 class NodePerturbMLP(MLP):
     """
@@ -370,19 +788,35 @@ class NodePerturbMLP(MLP):
         delta_loss = loss_now - loss_per
 
         hidden_update = np.mean(
-            delta_loss * (((hidden_p - hidden) / noise ** 2)[:, None, :] * add_bias(inputs)[None, :, :]), axis=2)
+            delta_loss
+            * (
+                ((hidden_p - hidden) / noise**2)[:, None, :]
+                * add_bias(inputs)[None, :, :]
+            ),
+            axis=2,
+        )
         output_update = np.mean(
-            delta_loss * (((output_p - output) / noise ** 2)[:, None, :] * add_bias(hidden_p)[None, :, :]), axis=2)
+            delta_loss
+            * (
+                ((output_p - output) / noise**2)[:, None, :]
+                * add_bias(hidden_p)[None, :, :]
+            ),
+            axis=2,
+        )
 
         return (hidden_update, output_update)
+
     def node_perturb_loss(self, rng, inputs, targets, noise=1.0):
         """
         Calculates the node perturbation loss for Node Perturbation MLP.
         """
         delta_W_h, delta_W_y = self.node_perturb(rng, inputs, targets, noise=noise)
-        node_perturb_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        node_perturb_loss = self.mse_loss(
+            rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y
+        )
         return node_perturb_loss
-    
+
+
 class FeedbackAlignmentMLP(MLP):
     """
     A multilayer perceptron that is capable of learning through the Feedback Alignment algorithm
@@ -399,18 +833,24 @@ class FeedbackAlignmentMLP(MLP):
 
         # calculate the updates
         error = targets - output
-        delta_W_h = np.dot(np.dot(self.B, error * self.act_deriv(output)) * self.act_deriv(hidden),
-                           add_bias(inputs).transpose())
+        delta_W_h = np.dot(
+            np.dot(self.B, error * self.act_deriv(output)) * self.act_deriv(hidden),
+            add_bias(inputs).transpose(),
+        )
         delta_W_y = np.dot(error * self.act_deriv(output), add_bias(hidden).transpose())
 
         return delta_W_h, delta_W_y
+
     def feedback_loss(self, rng, inputs, targets):
         """
         Calculates the feedback alignment loss for Feedback Alignment MLP.
         """
         delta_W_h, delta_W_y = self.feedback(rng, inputs, targets)
-        feedback_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        feedback_loss = self.mse_loss(
+            rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y
+        )
         return feedback_loss
+
 
 class KolenPollackMLP(MLP):
     """
@@ -427,8 +867,10 @@ class KolenPollackMLP(MLP):
 
         # calculate the updates for the forward weights
         error = targets - output
-        delta_W_h = np.dot(np.dot(self.B, error * self.act_deriv(output)) * self.act_deriv(hidden), \
-                           add_bias(inputs).transpose())
+        delta_W_h = np.dot(
+            np.dot(self.B, error * self.act_deriv(output)) * self.act_deriv(hidden),
+            add_bias(inputs).transpose(),
+        )
         delta_err = np.dot(error * self.act_deriv(output), add_bias(hidden).transpose())
         delta_W_y = delta_err - 0.1 * self.W_y
 
@@ -436,35 +878,17 @@ class KolenPollackMLP(MLP):
         delta_B = delta_err[:, :-1].transpose() - 0.1 * self.B
         self.B += eta_back * delta_B
         return (delta_W_h, delta_W_y)
+
     def kolepoll_loss(self, rng, inputs, targets, eta_back=0.01):
         """
         Calculates the Kolen-Pollack loss for Kolen-Pollack MLP.
         """
         delta_W_h, delta_W_y = self.kolepoll(rng, inputs, targets, eta_back=eta_back)
-        kolepoll_loss = self.mse_loss(rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y)
+        kolepoll_loss = self.mse_loss(
+            rng, inputs, targets, W_h=self.W_h + delta_W_h, W_y=self.W_y + delta_W_y
+        )
         return kolepoll_loss
 
-# Define hyperparameters
-BATCH_SIZE = 64
-input_size = 10  # Example input size
-hidden_size = 50  # Example hidden size
-output_size = 1   # Example output size
-
-# Initialize models
-weight_perturb_mlp = WeightPerturbMLP(input_size, hidden_size, output_size)
-node_perturb_mlp = NodePerturbMLP(input_size, hidden_size, output_size)
-feedback_align_mlp = FeedbackAlignmentMLP(input_size, hidden_size, output_size)
-kolen_pollack_mlp = KolenPollackMLP(input_size, hidden_size, output_size)
-
-# Initialize DataLoader for test set
-test_loader = torch.utils.data.DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False)
-
-# List of all MLP models
-mlps = [weight_perturb_mlp, node_perturb_mlp, feedback_align_mlp, kolen_pollack_mlp]
-
-# Compute losses
-losses = compute_losses_for_all_mlps(mlps, test_loader)
-print(losses)
 
 if __name__ == "__main__":
     pass
