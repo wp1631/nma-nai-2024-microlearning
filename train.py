@@ -64,6 +64,42 @@ def download_mnist(train_prop=0.8, keep_prop=0.5):
 
 train_set, valid_set, test_set = download_mnist()
 
+with contextlib.redirect_stdout(io.StringIO()):
+    # Load the MNIST dataset, 50K training images, 10K validation, 10K testing
+    train_set = datasets.MNIST(
+        "./", transform=transforms.ToTensor(), train=True, download=True
+    )
+    test_set = datasets.MNIST(
+        "./", transform=transforms.ToTensor(), train=False, download=True
+    )
+
+    rng_data = np.random.default_rng(seed=42)
+    train_num = 50000
+    shuffled_train_idx = rng_data.permutation(train_num)
+
+    full_train_images = train_set.data.numpy().astype(float) / 255
+    train_images = (
+        full_train_images[shuffled_train_idx[:train_num]].reshape((-1, 784)).T.copy()
+    )
+    valid_images = (
+        full_train_images[shuffled_train_idx[train_num:]].reshape((-1, 784)).T.copy()
+    )
+    test_images = (test_set.data.numpy().astype(float) / 255).reshape((-1, 784)).T
+
+    full_train_labels = torch.nn.functional.one_hot(
+        train_set.targets, num_classes=10
+    ).numpy()
+    train_labels = full_train_labels[shuffled_train_idx[:train_num]].T.copy()
+    valid_labels = full_train_labels[shuffled_train_idx[train_num:]].T.copy()
+    test_labels = (
+        torch.nn.functional.one_hot(test_set.targets, num_classes=10).numpy().T
+    )
+
+    full_train_images = None
+    full_train_labels = None
+    train_set = None
+    test_set = None
+
 
 def restrict_classes(dataset, classes=[6], keep=True):
     """
@@ -402,47 +438,6 @@ mlps = [
 ]
 
 if __name__ == "__main__":
-
-    with contextlib.redirect_stdout(io.StringIO()):
-        # Load the MNIST dataset, 50K training images, 10K validation, 10K testing
-        train_set = datasets.MNIST(
-            "./", transform=transforms.ToTensor(), train=True, download=True
-        )
-        test_set = datasets.MNIST(
-            "./", transform=transforms.ToTensor(), train=False, download=True
-        )
-
-        rng_data = np.random.default_rng(seed=42)
-        train_num = 50000
-        shuffled_train_idx = rng_data.permutation(train_num)
-
-        full_train_images = train_set.data.numpy().astype(float) / 255
-        train_images = (
-            full_train_images[shuffled_train_idx[:train_num]]
-            .reshape((-1, 784))
-            .T.copy()
-        )
-        valid_images = (
-            full_train_images[shuffled_train_idx[train_num:]]
-            .reshape((-1, 784))
-            .T.copy()
-        )
-        test_images = (test_set.data.numpy().astype(float) / 255).reshape((-1, 784)).T
-
-        full_train_labels = torch.nn.functional.one_hot(
-            train_set.targets, num_classes=10
-        ).numpy()
-        train_labels = full_train_labels[shuffled_train_idx[:train_num]].T.copy()
-        valid_labels = full_train_labels[shuffled_train_idx[train_num:]].T.copy()
-        test_labels = (
-            torch.nn.functional.one_hot(test_set.targets, num_classes=10).numpy().T
-        )
-
-        full_train_images = None
-        full_train_labels = None
-        train_set = None
-        test_set = None
-
     # Plot some example images to make sure everything is loaded in properly
     with plt.xkcd():
         fig, axs = plt.subplots(1, 10)
