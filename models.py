@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import pdb
 
 
 def sigmoid(X):
@@ -346,13 +347,54 @@ class MLP(object):
         """
         Calculates the weight updates for perturbation learning, using noise with SD as given
         """
-        raise NotImplementedError()
+
+        # get the random perturbations
+        delta_W_h = rng.normal(scale=noise, size=self.W_h.shape)
+        delta_W_y = rng.normal(scale=noise, size=self.W_y.shape)
+
+        # calculate the loss with and without the perturbations
+        loss_now = self.mse_loss(rng, inputs, targets)
+        loss_per = self.mse_loss(
+            rng, inputs, targets, self.W_h + delta_W_h, self.W_y + delta_W_y
+        )
+
+        # updates
+        delta_loss = loss_now - loss_per
+        W_h_update = delta_loss * delta_W_h / noise**2
+        W_y_update = delta_loss * delta_W_y / noise**2
+        return W_h_update, W_y_update
 
     def node_perturb(self, rng, inputs, targets, noise=1.0):
         """
         Calculates the weight updates for node perturbation learning, using noise with SD as given
         """
-        raise NotImplementedError()
+
+        # get the random perturbations
+        hidden, output = self.inference(rng, inputs)
+        hidden_p, output_p = self.inference(rng, inputs, noise=noise)
+
+        loss_now = self.mse_loss_batch(rng, inputs, targets, output=output)
+        loss_per = self.mse_loss_batch(rng, inputs, targets, output=output_p)
+        delta_loss = loss_now - loss_per
+
+        hidden_update = np.mean(
+            delta_loss
+            * (
+                ((hidden_p - hidden) / noise**2)[:, None, :]
+                * add_bias(inputs)[None, :, :]
+            ),
+            axis=2,
+        )
+        output_update = np.mean(
+            delta_loss
+            * (
+                ((output_p - output) / noise**2)[:, None, :]
+                * add_bias(hidden_p)[None, :, :]
+            ),
+            axis=2,
+        )
+
+        return (hidden_update, output_update)
 
     # function for calculating gradient updates
     def gradient(self, rng, inputs, targets):
@@ -379,14 +421,42 @@ class MLP(object):
         """
         Calculates the weight updates for feedback alignment learning
         """
-        raise NotImplementedError()
+
+        # do a forward pass
+        hidden, output = self.inference(rng, inputs)
+
+        # calculate the updates
+        error = targets - output
+        delta_W_h = np.dot(
+            np.dot(self.B, error * self.act_deriv(output)) * self.act_deriv(hidden),
+            add_bias(inputs).transpose(),
+        )
+        delta_W_y = np.dot(error * self.act_deriv(output), add_bias(hidden).transpose())
+
+        return delta_W_h, delta_W_y
 
     # function for calculating Kolen-Pollack updates
     def kolepoll(self, rng, inputs, targets, eta_back=0.01):
         """
         Calculates the weight updates for Kolen-Polack learning
         """
-        raise NotImplementedError()
+
+        # do a forward pass
+        (hidden, output) = self.inference(rng, inputs)
+
+        # calculate the updates for the forward weights
+        error = targets - output
+        delta_W_h = np.dot(
+            np.dot(self.B, error * self.act_deriv(output)) * self.act_deriv(hidden),
+            add_bias(inputs).transpose(),
+        )
+        delta_err = np.dot(error * self.act_deriv(output), add_bias(hidden).transpose())
+        delta_W_y = delta_err - 0.1 * self.W_y
+
+        # calculate the updates for the backwards weights and implement them
+        delta_B = delta_err[:, :-1].transpose() - 0.1 * self.B
+        self.B += eta_back * delta_B
+        return (delta_W_h, delta_W_y)
 
     def return_grad(
         self, rng, inputs, targets, algorithm="backprop", eta=0.0, noise=1.0
