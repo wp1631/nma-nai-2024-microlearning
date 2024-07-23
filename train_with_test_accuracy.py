@@ -4,7 +4,6 @@ import torch
 import io
 import numpy as np
 from tqdm import tqdm
-
 from models import (
     MultiLayerPerceptron,
     NodePerturbMLP,
@@ -28,7 +27,6 @@ output_size = 1  # Example output size
 def download_mnist(train_prop=0.8, keep_prop=0.5):
 
     valid_prop = 1 - train_prop
-
     discard_prop = 1 - keep_prop
 
     transform = torchvision.transforms.Compose(
@@ -39,7 +37,6 @@ def download_mnist(train_prop=0.8, keep_prop=0.5):
     )
 
     with contextlib.redirect_stdout(io.StringIO()):  # to suppress output
-
         full_train_set = torchvision.datasets.MNIST(
             root="./data/", train=True, download=True, transform=transform
         )
@@ -181,7 +178,7 @@ class BasicOptimizer(torch.optim.Optimizer):
                     p.data.add_(p.grad, alpha=-group["lr"])
 
 
-def train_model(MLP, train_loader, valid_loader, test_loader, optimizer, num_epochs=5):
+def train_model(MLP, train_loader, valid_loader, test_loader, num_epochs=5):
     """
     Train a model for several epochs.
 
@@ -190,28 +187,25 @@ def train_model(MLP, train_loader, valid_loader, test_loader, optimizer, num_epo
     - train_loader (torch dataloader): Dataloader to use to train the model.
     - valid_loader (torch dataloader): Dataloader to use to validate the model.
     - test_loader (torch dataloader): Dataloader to use to test the model.
-    - optimizer (torch optimizer): Optimizer to use to update the model.
-    - num_epochs (int, optional): Number of epochs to train model.
+    - num_epochs (int, optional): Number of epochs to train the model.
 
     Returns:
-    - results_dict (dict): Dictionary storing results across epochs on training,
-      validation, and test data.
+    - results_dict (dict): Dictionary storing results across epochs on training, validation, and test data.
     """
 
     results_dict = {
         "avg_train_losses": list(),
         "avg_valid_losses": list(),
-        "avg_test_losses": list(),
+        "avg_test_accuracies": list(),
         "avg_train_accuracies": list(),
         "avg_valid_accuracies": list(),
-        "avg_test_accuracies": list(),
     }
+
+    criterion = torch.nn.NLLLoss()
 
     for e in tqdm(range(num_epochs)):
         no_train = True if e == 0 else False  # to get a baseline
-        latest_epoch_results_dict = train_epoch(
-            MLP, train_loader, valid_loader, test_loader, optimizer=optimizer, no_train=no_train
-        )
+        latest_epoch_results_dict = train_epoch(MLP, train_loader, valid_loader, test_loader, criterion, no_train=no_train)
 
         for key, result in latest_epoch_results_dict.items():
             if key in results_dict.keys() and isinstance(results_dict[key], list):
@@ -222,7 +216,7 @@ def train_model(MLP, train_loader, valid_loader, test_loader, optimizer, num_epo
     return results_dict
 
 
-def train_epoch(MLP, train_loader, valid_loader, test_loader, optimizer, no_train=False):
+def train_epoch(MLP, train_loader, valid_loader, test_loader, criterion, no_train=False):
     """
     Train a model for one epoch.
 
@@ -231,24 +225,20 @@ def train_epoch(MLP, train_loader, valid_loader, test_loader, optimizer, no_trai
     - train_loader (torch dataloader): Dataloader to use to train the model.
     - valid_loader (torch dataloader): Dataloader to use to validate the model.
     - test_loader (torch dataloader): Dataloader to use to test the model.
-    - optimizer (torch optimizer): Optimizer to use to update the model.
-    - no_train (bool, optional): If True, the model is not trained for the
-      current epoch. Allows a baseline (chance) performance to be computed in the
-      first epoch before training starts.
+    - criterion (torch loss function): Loss function.
+    - no_train (bool, optional): If True, the model is not trained for the current epoch. Allows a baseline (chance) performance to be computed in the first epoch before training starts.
 
     Returns:
-    - epoch_results_dict (dict): Dictionary storing epoch results on training,
-      validation, and test data.
+    - epoch_results_dict (dict): Dictionary storing epoch results on training, validation, and test data.
     """
 
-    criterion = torch.nn.NLLLoss()
-
-    epoch_results_dict = dict()
-    for dataset in ["train", "valid", "test"]:
-        for sub_str in ["correct_by_class", "seen_by_class"]:
-            epoch_results_dict[f"{dataset}_{sub_str}"] = {
-                i: 0 for i in range(MLP.num_outputs)
-            }
+    epoch_results_dict = {
+        "avg_train_losses": 0,
+        "avg_valid_losses": 0,
+        "avg_test_accuracies": 0,
+        "avg_train_accuracies": 0,
+        "avg_valid_accuracies": 0,
+    }
 
     MLP.train()
     train_losses, train_acc = list(), list()
@@ -258,76 +248,80 @@ def train_epoch(MLP, train_loader, valid_loader, test_loader, optimizer, no_trai
         acc = (torch.argmax(y_pred.detach(), axis=1) == y).sum() / len(y)
         train_losses.append(loss.item() * len(y))
         train_acc.append(acc.item() * len(y))
-
-        for label in range(MLP.num_outputs):
-            y_label_idx = y == label
-            epoch_results_dict["train_seen_by_class"][label] += y_label_idx.sum()
-            epoch_results_dict["train_correct_by_class"][label] += (
-                torch.argmax(y_pred.detach(), axis=1)[y_label_idx] == label
-            ).sum()
-
         if not no_train:
-            optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
+            with torch.no_grad():
+                for param in MLP.parameters():
+                    param -= param.grad * 0.01  # Using a fixed learning rate of 0.01
+                    param.grad = None
+
+    num_items = len(train_loader.dataset)
+    epoch_results_dict["avg_train_losses"] = np.sum(train_losses) / num_items
+    epoch_results_dict["avg_train_accuracies"] = np.sum(train_acc) / num_items * 100
 
     MLP.eval()
     valid_losses, valid_acc = list(), list()
-    with torch.no_grad():
-        for X, y in valid_loader:
-            y_pred = MLP(X, y=y)
-            loss = criterion(torch.log(y_pred), y)
-            acc = (torch.argmax(y_pred.detach(), axis=1) == y).sum() / len(y)
-            valid_losses.append(loss.item() * len(y))
-            valid_acc.append(acc.item() * len(y))
+    for X, y in valid_loader:
+        y_pred = MLP(X, y=y)
+        loss = criterion(torch.log(y_pred), y)
+        acc = (torch.argmax(y_pred, axis=1) == y).sum() / len(y)
+        valid_losses.append(loss.item() * len(y))
+        valid_acc.append(acc.item() * len(y))
 
-            for label in range(MLP.num_outputs):
-                y_label_idx = y == label
-                epoch_results_dict["valid_seen_by_class"][label] += y_label_idx.sum()
-                epoch_results_dict["valid_correct_by_class"][label] += (
-                    torch.argmax(y_pred.detach(), axis=1) == label
-                ).sum()
+    num_items = len(valid_loader.dataset)
+    epoch_results_dict["avg_valid_losses"] = np.sum(valid_losses) / num_items
+    epoch_results_dict["avg_valid_accuracies"] = np.sum(valid_acc) / num_items * 100
 
-    test_losses, test_acc = list(), list()
-    with torch.no_grad():
-        for X, y in test_loader:
-            y_pred = MLP(X, y=y)
-            loss = criterion(torch.log(y_pred), y)
-            acc = (torch.argmax(y_pred.detach(), axis=1) == y).sum() / len(y)
-            test_losses.append(loss.item() * len(y))
-            test_acc.append(acc.item() * len(y))
+    test_acc = list()
+    for X, y in test_loader:
+        y_pred = MLP(X, y=y)
+        acc = (torch.argmax(y_pred, axis=1) == y).sum() / len(y)
+        test_acc.append(acc.item() * len(y))
 
-            for label in range(MLP.num_outputs):
-                y_label_idx = y == label
-                epoch_results_dict["test_seen_by_class"][label] += y_label_idx.sum()
-                epoch_results_dict["test_correct_by_class"][label] += (
-                    torch.argmax(y_pred.detach(), axis=1) == label
-                ).sum()
-
-    avg_train_loss = np.sum(train_losses) / np.sum(
-        list(epoch_results_dict["train_seen_by_class"].values())
-    )
-    avg_valid_loss = np.sum(valid_losses) / np.sum(
-        list(epoch_results_dict["valid_seen_by_class"].values())
-    )
-    avg_test_loss = np.sum(test_losses) / np.sum(
-        list(epoch_results_dict["test_seen_by_class"].values())
-    )
-    avg_train_acc = np.sum(train_acc) / np.sum(
-        list(epoch_results_dict["train_seen_by_class"].values())
-    )
-    avg_valid_acc = np.sum(valid_acc) / np.sum(
-        list(epoch_results_dict["valid_seen_by_class"].values())
-    )
-    avg_test_acc = np.sum(test_acc) / np.sum(
-        list(epoch_results_dict["test_seen_by_class"].values())
-    )
-
-    epoch_results_dict["avg_train_loss"] = avg_train_loss
-    epoch_results_dict["avg_valid_loss"] = avg_valid_loss
-    epoch_results_dict["avg_test_loss"] = avg_test_loss
-    epoch_results_dict["avg_train_acc"] = avg_train_acc
-    epoch_results_dict["avg_valid_acc"] = avg_valid_acc
-    epoch_results_dict["avg_test_acc"] = avg_test_acc
+    num_items = len(test_loader.dataset)
+    epoch_results_dict["avg_test_accuracies"] = np.sum(test_acc) / num_items * 100
 
     return epoch_results_dict
+
+
+# Example usage with dummy data
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+# Create a dummy dataset
+X_train = torch.randn(1000, 784)
+y_train = torch.randint(0, 10, (1000,))
+train_dataset = TensorDataset(X_train, y_train)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+
+X_valid = torch.randn(200, 784)
+y_valid = torch.randint(0, 10, (200,))
+valid_dataset = TensorDataset(X_valid, y_valid)
+valid_loader = DataLoader(valid_dataset, batch_size=64, shuffle=True)
+
+X_test = torch.randn(200, 784)
+y_test = torch.randint(0, 10, (200,))
+test_dataset = TensorDataset(X_test, y_test)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=True)
+
+# Define a simple model
+class SimpleMLP(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(SimpleMLP, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, output_size)
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x, y=None):
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        out = self.softmax(out)
+        return out
+
+
+# Instantiate and train the model
+model = SimpleMLP(784, 128, 10)
+results = train_model(model, train_loader, valid_loader, test_loader, num_epochs=5)
+print(results)
