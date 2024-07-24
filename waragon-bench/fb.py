@@ -461,7 +461,7 @@ if __name__ == "__main__":
     indices = rng_wp.choice(range(test_images.shape[1]), size=(1000,), replace=False)
     losses_perturb = np.zeros((numupdates,))
     accuracy_perturb = np.zeros((numepochs,))
-    (losses_perturb[:], accuracy_perturb[:], _, snr_perturb) = weight_perturb_mlp.train(
+    (losses_perturb[:], accuracy_perturb[:], _, snr_perturb) = feedback_align_mlp.train(
         rng_wp,
         train_images,
         train_labels,
@@ -470,7 +470,7 @@ if __name__ == "__main__":
         test_labels[:, indices],
         learning_rate=learnrate,
         batch_size=batchsize,
-        algorithm="perturb",
+        algorithm="feedback",
         noise=noise,
         report=report,
         report_rate=rep_rate,
@@ -485,18 +485,18 @@ if __name__ == "__main__":
 
     print("Loss:", losses_perturb[-1])
     print("Acc:", accuracy_perturb[-1])
-    test_loss = weight_perturb_mlp.mse_loss_batch(rng_wp, test_images, test_labels)
-    test_loss_sd1 = weight_perturb_mlp.mse_loss_batch(
+    test_loss = feedback_align_mlp.mse_loss_batch(rng_wp, test_images, test_labels)
+    test_loss_sd1 = feedback_align_mlp.mse_loss_batch(
         rng_wp, test_images + np.random.normal(0, 1, test_images.shape), test_labels
     )
-    test_loss_sd2 = weight_perturb_mlp.mse_loss_batch(
+    test_loss_sd2 = feedback_align_mlp.mse_loss_batch(
         rng_wp, test_images + np.random.normal(0, 2, test_images.shape), test_labels
     )
-    _, test_result = weight_perturb_mlp.inference(rng_wp, test_images)
-    _, test_result_sd1 = weight_perturb_mlp.inference(
+    _, test_result = feedback_align_mlp.inference(rng_wp, test_images)
+    _, test_result_sd1 = feedback_align_mlp.inference(
         rng_wp, test_images + np.random.normal(0, 1, test_images.shape)
     )
-    _, test_result_sd2 = weight_perturb_mlp.inference(
+    _, test_result_sd2 = feedback_align_mlp.inference(
         rng_wp, test_images + np.random.normal(0, 2, test_images.shape)
     )
     print("Test Loss:", np.mean(test_loss))

@@ -456,12 +456,14 @@ if __name__ == "__main__":
     activation = "sigmoid"
     report = True
     rep_rate = 1
-    seed = 12345
+    # seed = 12345
+    # seed = 1112
+    seed = 42
     rng_wp = np.random.default_rng(seed=seed)
     indices = rng_wp.choice(range(test_images.shape[1]), size=(1000,), replace=False)
     losses_perturb = np.zeros((numupdates,))
     accuracy_perturb = np.zeros((numepochs,))
-    (losses_perturb[:], accuracy_perturb[:], _, snr_perturb) = weight_perturb_mlp.train(
+    (losses_perturb[:], accuracy_perturb[:], _, snr_perturb) = kolen_pollack_mlp.train(
         rng_wp,
         train_images,
         train_labels,
@@ -470,7 +472,7 @@ if __name__ == "__main__":
         test_labels[:, indices],
         learning_rate=learnrate,
         batch_size=batchsize,
-        algorithm="perturb",
+        algorithm="kolepoll",
         noise=noise,
         report=report,
         report_rate=rep_rate,
@@ -485,18 +487,18 @@ if __name__ == "__main__":
 
     print("Loss:", losses_perturb[-1])
     print("Acc:", accuracy_perturb[-1])
-    test_loss = weight_perturb_mlp.mse_loss_batch(rng_wp, test_images, test_labels)
-    test_loss_sd1 = weight_perturb_mlp.mse_loss_batch(
+    test_loss = kolen_pollack_mlp.mse_loss_batch(rng_wp, test_images, test_labels)
+    test_loss_sd1 = kolen_pollack_mlp.mse_loss_batch(
         rng_wp, test_images + np.random.normal(0, 1, test_images.shape), test_labels
     )
-    test_loss_sd2 = weight_perturb_mlp.mse_loss_batch(
+    test_loss_sd2 = kolen_pollack_mlp.mse_loss_batch(
         rng_wp, test_images + np.random.normal(0, 2, test_images.shape), test_labels
     )
-    _, test_result = weight_perturb_mlp.inference(rng_wp, test_images)
-    _, test_result_sd1 = weight_perturb_mlp.inference(
+    _, test_result = kolen_pollack_mlp.inference(rng_wp, test_images)
+    _, test_result_sd1 = kolen_pollack_mlp.inference(
         rng_wp, test_images + np.random.normal(0, 1, test_images.shape)
     )
-    _, test_result_sd2 = weight_perturb_mlp.inference(
+    _, test_result_sd2 = kolen_pollack_mlp.inference(
         rng_wp, test_images + np.random.normal(0, 2, test_images.shape)
     )
     print("Test Loss:", np.mean(test_loss))

@@ -449,7 +449,7 @@ if __name__ == "__main__":
     initweight = 0.1
     learnrate = 0.001
     noise = 0.1
-    numepochs = 20
+    numepochs = 60
     numrepeats = 1
     numbatches = int(train_images.shape[1] / batchsize)
     numupdates = numepochs * numbatches
