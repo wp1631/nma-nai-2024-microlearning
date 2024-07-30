@@ -39,7 +39,6 @@ def add_bias(inputs):
     """
     Append an "always on" bias unit to some inputs
     """
-    print(inputs.shape)
     return np.append(inputs, np.ones((1, inputs.shape[1])), axis=0)
 
 
@@ -271,6 +270,16 @@ class MLP(object):
         )  # hidden-to-output weights & bias
         self.B = rng.normal(scale=self.sigma, size=(self.N, 10))  # feedback weights
 
+    def _init_weight(self, seed):
+        rng = np.random.default_rng(seed=seed)
+        self.W_h = rng.normal(
+            scale=self.sigma, size=(self.N, 784 + 1)
+        )  # input-to-hidden weights & bias
+        self.W_y = rng.normal(
+            scale=self.sigma, size=(10, self.N + 1)
+        )  # hidden-to-output weights & bias
+        self.B = rng.normal(scale=self.sigma, size=(self.N, 10))  # feedback weights
+
     # The non-linear activation function
     def activate(self, inputs):
         """
@@ -458,6 +467,36 @@ class MLP(object):
         self.B += eta_back * delta_B
         return (delta_W_h, delta_W_y)
 
+    def hebb_forward(self, inputs, W_h=None, W_y=None):
+        # load the current network weights if no weights given
+        if W_h is None:
+            W_h = self.W_h
+        if W_y is None:
+            W_y = self.W_y
+
+        # calculate the hidden activities
+        hidden = self.activate(np.dot(W_h, add_bias(inputs)))
+
+        # calculate the output activities
+        output = self.activate(np.dot(W_y, add_bias(hidden)))
+
+        return hidden, output
+
+    def hebb(self, inputs, targets, eta_back=0.01):
+        hidden, output = self.hebb_forward(inputs)
+        error = targets - output
+        delta_W_h = np.dot(
+            self.act_deriv(hidden),
+            add_bias(inputs).transpose(),
+        )
+        delta_err = np.dot(error * self.act_deriv(output), add_bias(hidden).transpose())
+        delta_W_y = delta_err - 0.1 * self.W_y
+
+        # calculate the updates for the backwards weights and implement them
+        delta_B = delta_err[:, :-1].transpose() - 0.1 * self.B
+        self.B += eta_back * delta_B
+        return (delta_W_h, delta_W_y)
+
     def return_grad(
         self, rng, inputs, targets, algorithm="backprop", eta=0.0, noise=1.0
     ):
@@ -470,6 +509,8 @@ class MLP(object):
             delta_W_h, delta_W_y = self.feedback(rng, inputs, targets)
         elif algorithm == "kolepoll":
             delta_W_h, delta_W_y = self.kolepoll(rng, inputs, targets, eta_back=eta)
+        elif algorithm == "hebb":
+            delta_W_h, delta_W_y = self.hebb(inputs, targets, eta_back=eta)
         else:
             delta_W_h, delta_W_y = self.gradient(rng, inputs, targets)
 
@@ -509,6 +550,7 @@ class MLP(object):
         noise=1.0,
         report=False,
         report_rate=10,
+        return_weight=False,
     ):
         """
         Trains the network with algorithm in batches for the given number of epochs on the data provided.
@@ -535,6 +577,10 @@ class MLP(object):
         losses = np.zeros((num_epochs * batches.shape[0],))
         accuracy = np.zeros((num_epochs,))
         cosine_similarity = np.zeros((num_epochs,))
+        weight_h_tracker = np.zeros((num_epochs + 1, self.W_h.size))
+        weight_y_tracker = np.zeros((num_epochs + 1, self.W_y.size))
+        weight_h_tracker[0] = self.W_h.flatten()
+        weight_y_tracker[0] = self.W_y.flatten()
 
         # estimate the gradient SNR on the test set
         grad = np.zeros((test_images.shape[1], *self.W_h.shape))
@@ -594,11 +640,22 @@ class MLP(object):
                     round(losses[update_counter - 1], 2),
                     ".",
                 )
+            if return_weight:
+                weight_h_tracker[epoch + 1] = self.W_h.flatten()
+                weight_y_tracker[epoch + 1] = self.W_y.flatten()
 
         # provide an output message
         if report:
             print("Training complete.")
-
+        if return_weight:
+            return (
+                losses,
+                accuracy,
+                cosine_similarity,
+                snr,
+                weight_h_tracker,
+                weight_y_tracker,
+            )
         return (losses, accuracy, cosine_similarity, snr)
 
 
